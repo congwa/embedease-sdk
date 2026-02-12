@@ -25,3 +25,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# WindsurfChatOpen
+.windsurfchatopen/
+.windsurfrules
