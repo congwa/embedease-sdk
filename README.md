@@ -54,6 +54,7 @@ export const useChatStore = create(
 
 Store 内置以下功能：
 - `sendMessage(message)` — 发送消息并自动流式处理
+- `addUserMessageOnly(message)` — 仅添加用户消息到 timeline（不触发 API，适用于 WebSocket 场景）
 - `abortStream()` — 中止当前流
 - `clearMessages()` — 清空消息
 - `setConversationId(id)` — 设置会话 ID
@@ -212,6 +213,174 @@ async for event in orchestrator.run(message="你好", conversation_id="c1", user
 - `StreamingResponseHandler` — 流响应处理
 - Middleware / Tools 注册系统
 
+### Store 扩展 — `createExtendedChatStore`（推荐）
+
+当需要在 SDK Store 基础上添加自定义字段（如 `conversationId` 来源变更、自定义 state 等），
+使用 `createExtendedChatStore` 避免手动的 `as any` 类型断言：
+
+```typescript
+import { create } from "zustand";
+import {
+  createExtendedChatStore,
+  type ChatStoreState,
+} from "@embedease/chat-sdk-react";
+
+interface MyExtra {
+  projectName: string;
+  setProjectName: (name: string) => void;
+}
+
+export const useChatStore = create<ChatStoreState & MyExtra>(
+  createExtendedChatStore(
+    {
+      baseUrl: "/api",
+      onEvent: (event, api) => {
+        if (event.conversation_id) {
+          api.setState({ conversationId: event.conversation_id });
+        }
+        return event;
+      },
+    },
+    (_sdkSlice, set) => ({
+      projectName: "",
+      setProjectName: (name) => set({ projectName: name } as Partial<ChatStoreState & MyExtra>),
+    })
+  )
+);
+```
+
+### WebSocket 场景 — `addUserMessageOnly`
+
+在 WebSocket 聊天中，消息通过 WS 通道发送而非 SSE。此时可用 `addUserMessageOnly` 仅将用户消息渲染到 timeline：
+
+```typescript
+const { addUserMessageOnly, setTimelineState } = useChatStore();
+
+function handleSend(message: string) {
+  addUserMessageOnly(message);
+  ws.send(JSON.stringify({ type: "user.message", content: message }));
+}
+```
+
+---
+
+## 多项目使用指南
+
+### 架构概览
+
+SDK 采用「源码拷贝 + 自动同步」模式：
+
+```
+embedease-ai/                    # SDK 开发源头
+├── frontend/packages/chat-sdk/
+├── frontend/packages/chat-sdk-react/
+└── backend/packages/langgraph-agent-kit/
+        │
+        │  scripts/sync-sdk.sh (自动同步)
+        ├──────────────> embedease-sdk/          # 镜像仓库
+        └──────────────> Skill-Know/             # 消费方项目
+```
+
+### 同步 SDK 到其他项目
+
+在 embedease-ai 根目录执行：
+
+```bash
+./scripts/sync-sdk.sh                      # 同步到所有目标
+./scripts/sync-sdk.sh --target sdk         # 只同步到 embedease-sdk
+./scripts/sync-sdk.sh --target skill-know  # 只同步到 Skill-Know
+./scripts/sync-sdk.sh --tag v0.3.0         # 同步并打 tag
+./scripts/sync-sdk.sh --dry-run            # 仅预览
+```
+
+### 版本一致性检查
+
+```bash
+./scripts/check-sdk-version.sh             # 检查版本号
+./scripts/check-sdk-version.sh --fix       # 自动修复 CHAT_SDK_VERSION 常量
+```
+
+### 消费方项目配置
+
+**前端** — 在 `package.json` 中配置 workspace 引用：
+
+```json
+{
+  "dependencies": {
+    "@embedease/chat-sdk": "workspace:*",
+    "@embedease/chat-sdk-react": "workspace:*"
+  }
+}
+```
+
+**后端** — 在 `pyproject.toml` 中配置路径引用：
+
+```toml
+dependencies = [
+    "langgraph-agent-kit @ file:./packages/langgraph-agent-kit"
+]
+```
+
+### 自定义事件扩展最佳实践
+
+推荐在消费方项目中创建 `sdk-extensions/` 目录：
+
+```
+frontend/lib/sdk-extensions/
+├── types.ts       # 自定义 TimelineItem 类型
+├── reducer.ts     # 业务 reducer（与 SDK reducer 组合）
+└── labels.ts      # 自定义工具标签
+```
+
+**types.ts** — 定义扩展的 TimelineItem：
+
+```typescript
+import type { TimelineItemBase } from "@embedease/chat-sdk";
+
+export interface SkillCompletionItem extends TimelineItemBase {
+  type: "skill.completion";
+  skillName: string;
+  score: number;
+}
+
+export type AppTimelineItem = TimelineItem | SkillCompletionItem;
+```
+
+**reducer.ts** — 组合业务 reducer：
+
+```typescript
+import { composeReducers, insertItem, type CustomReducer } from "@embedease/chat-sdk-react";
+import type { AppTimelineItem } from "./types";
+
+const appReducer: CustomReducer<AppTimelineItem> = (state, event) => {
+  const evt = event as Record<string, unknown>;
+  if (evt.type === "skill.completion") {
+    return insertItem(state, {
+      type: "skill.completion",
+      id: String(evt.seq),
+      turnId: "",
+      ts: Date.now(),
+      skillName: evt.skill_name as string,
+      score: evt.score as number,
+    } as AppTimelineItem);
+  }
+  return null;
+};
+
+export const appComposedReducer = composeReducers<AppTimelineItem>(appReducer);
+```
+
+**labels.ts** — 注册工具标签：
+
+```typescript
+import { registerToolLabels } from "@embedease/chat-sdk";
+
+registerToolLabels({
+  "search_products": "搜索商品",
+  "check_inventory": "检查库存",
+});
+```
+
 ---
 
 ## 版本管理
@@ -223,31 +392,20 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-## 消费方使用
-
-### 添加为 Submodule
+## 消费方添加 Submodule（可选）
 
 ```bash
 git submodule add https://github.com/congwa/embedease-sdk.git packages/embedease-sdk
 ```
 
-### 更新到最新版本
-
 ```bash
-cd packages/embedease-sdk
-git pull origin main
-cd ../..
+# 更新到最新版本
+cd packages/embedease-sdk && git pull origin main && cd ../..
 git add packages/embedease-sdk
 git commit -m "chore: 更新 embedease-sdk"
-```
 
-### 更新到指定 Tag
-
-```bash
-cd packages/embedease-sdk
-git fetch --tags
-git checkout v0.2.0
-cd ../..
+# 更新到指定 Tag
+cd packages/embedease-sdk && git fetch --tags && git checkout v0.2.0 && cd ../..
 git add packages/embedease-sdk
 git commit -m "chore: 更新 embedease-sdk 到 v0.2.0"
 ```
@@ -268,6 +426,8 @@ git commit -m "chore: 更新 embedease-sdk 到 v0.2.0"
 | `updateItemById<T>()` | 泛型化 item 更新 |
 | `removeWaitingItem<T>()` | 泛型化等待项移除 |
 | `CustomReducer<T>` | 自定义 reducer 类型定义 |
+| `createExtendedChatStore()` | 扩展 Store 工厂，避免 `as any` 类型断言 |
+| `addUserMessageOnly()` | 仅添加用户消息到 timeline（不触发 API） |
 
 ### 后端新增
 

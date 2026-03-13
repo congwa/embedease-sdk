@@ -1,0 +1,10 @@
+{
+  "name": "embedease-sdk",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r --filter './frontend/*' run build",
+    "dev": "pnpm -r --filter './frontend/*' run dev",
+    "clean": "pnpm -r --filter './frontend/*' run clean",
+    "typecheck": "pnpm -r --filter './frontend/*' run typecheck"
+  }
+}
