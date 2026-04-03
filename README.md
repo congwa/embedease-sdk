@@ -4,6 +4,278 @@
 
 > 当前版本：**v0.2.0**
 
+> [!IMPORTANT]
+> 本项目不再继续维护。现有代码会保留用于历史项目兼容、协议参考和迁移对照，但后续不再新增功能，也不再继续演进自定义聊天协议。
+>
+> 推荐新项目直接使用 [AI SDK](https://ai-sdk.dev/) 作为前端协议与渲染层，后端可继续搭配 LangChain Python / LangGraph。更准确地说，建议保留 LangChain 负责 agent 编排与 tool 调用，把流式协议切换为 AI SDK 的 UIMessage Stream / SSE 协议，并通过 `data-*` part 扩展业务 UI。
+
+## 停维说明
+
+### 为什么不再维护
+
+- 本项目本质上维护了一套自定义聊天协议与前端状态层：前端围绕 `timelineReducer` / `useChat` / Zustand Store，后端围绕 `meta.start`、`assistant.delta`、`tool.start`、`tool.end` 等事件。
+- 这套能力和 AI SDK 当前提供的 `useChat`、transport、UIMessage、SSE stream protocol、tool parts、`data-*` custom data parts 已经高度重叠。
+- 继续维护独立协议，意味着要持续投入在协议演进、多前端框架适配、消息持久化、工具调用渲染、流重连与错误恢复上，维护收益已经低于直接复用 AI SDK 官方体系。
+- LangChain / LangGraph 更适合专注在 agent 编排、RAG、tool orchestration；而前端消息协议与生成式 UI 渲染，交给 AI SDK 更标准，也更容易和社区生态对齐。
+
+### 推荐替代方案
+
+- 前端：使用 AI SDK 的 `useChat`，按 `message.parts` 渲染文本、工具结果和自定义业务卡片。
+- 后端：输出 AI SDK UIMessage Stream 协议，保持 SSE 返回头 `x-vercel-ai-ui-message-stream: v1`。
+- 扩展协议：不要再扩一套新的聊天事件名，优先使用官方 `data-*` custom data parts 承载业务 UI。
+- Agent 层：继续使用 LangChain Python / LangGraph，不需要迁移 agent 编排思路，只需要把流式输出映射到 AI SDK 协议。
+
+### 和当前 SDK 的使用对比
+
+| 场景 | 当前 `embedease-sdk` | 推荐方案 |
+|-----|------|------|
+| 前端状态入口 | `createChatStoreSlice()` / `useChat()` / `timelineReducer` | `useChat()` + `DefaultChatTransport` |
+| 后端输出协议 | 自定义 SSE 事件：`meta.start`、`assistant.delta`、`tool.start`、`tool.end` | AI SDK UIMessage Stream：`start`、`text-*`、`tool-*`、`start-step`、`finish-step`、`finish` |
+| 业务扩展方式 | `composeReducers()` 组合自定义 reducer | 官方 `data-*` custom data parts |
+| 工具调用展示 | 自己维护 `tool.call` timeline item | 按 `message.parts` 中的 tool parts / data parts 渲染 |
+| Python 后端接入 | 自己维护 SSE 编码和事件语义 | Python 只需输出兼容的 SSE part，前端仍可直接使用 `useChat` |
+| 跨后端/传输层 | 需要自己封装 | AI SDK 原生支持 transport-based architecture，可继续走 HTTP，也可自定义 transport |
+
+### 如何使用对比
+
+**当前 SDK**
+
+前端通常这样接入：
+
+```typescript
+import { create } from "zustand";
+import { createChatStoreSlice } from "@embedease/chat-sdk-react";
+
+export const useChatStore = create(
+  createChatStoreSlice({ baseUrl: "/api" })
+);
+```
+
+后端通常这样组织语义：
+
+```text
+meta.start -> assistant.delta -> tool.start -> tool.end -> assistant.final
+```
+
+**推荐方案：AI SDK**
+
+前端保留 `useChat`，但把后端改成输出 AI SDK UIMessage Stream：
+
+```typescript
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+
+export function ChatPage() {
+  const { messages, input, handleInputChange, handleSubmit } = useChat({
+    transport: new DefaultChatTransport({
+      api: "http://localhost:8000/chat",
+    }),
+  });
+
+  return (
+    <div>
+      <form onSubmit={handleSubmit}>
+        <input value={input} onChange={handleInputChange} />
+        <button type="submit">Send</button>
+      </form>
+
+      {messages.map((message) => (
+        <div key={message.id}>
+          {message.parts.map((part, index) => {
+            if (part.type === "text") {
+              return <p key={index}>{part.text}</p>;
+            }
+
+            if (part.type === "data-status") {
+              return (
+                <div key={index}>
+                  <strong>{part.data.stage}</strong>: {part.data.message}
+                </div>
+              );
+            }
+
+            return null;
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+对应的后端语义会变成：
+
+```text
+start -> start-step -> text-start -> text-delta -> data-status -> text-end -> finish-step -> finish
+```
+
+### AI SDK + LangChain Python 最小示例
+
+下面这个最小示例保留 LangChain Python 负责模型调用，前端直接使用 AI SDK 的 `useChat`。示例里额外加入了 `data-status`，用来演示官方 `data-*` 扩充协议。
+
+**前端：React + `useChat`**
+
+```tsx
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+
+export default function ChatPage() {
+  const { messages, input, handleInputChange, handleSubmit } = useChat({
+    transport: new DefaultChatTransport({
+      api: "http://localhost:8000/chat",
+    }),
+  });
+
+  return (
+    <main>
+      <form onSubmit={handleSubmit}>
+        <input
+          value={input}
+          onChange={handleInputChange}
+          placeholder="问一个问题"
+        />
+        <button type="submit">发送</button>
+      </form>
+
+      {messages.map((message) => (
+        <section key={message.id}>
+          {message.parts.map((part, index) => {
+            if (part.type === "text") {
+              return <p key={index}>{part.text}</p>;
+            }
+
+            if (part.type === "data-status") {
+              return (
+                <div key={index}>
+                  阶段：{part.data.stage}，说明：{part.data.message}
+                </div>
+              );
+            }
+
+            return null;
+          })}
+        </section>
+      ))}
+    </main>
+  );
+}
+```
+
+**后端：FastAPI + LangChain Python + AI SDK SSE 协议**
+
+```python
+import json
+import uuid
+from collections.abc import AsyncIterator
+
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+
+app = FastAPI()
+model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+
+def to_sse(part: dict) -> str:
+    return f"data: {json.dumps(part, ensure_ascii=False)}\n\n"
+
+
+def get_last_user_text(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+
+        parts = message.get("parts", [])
+        for part in parts:
+            if part.get("type") == "text":
+                return part.get("text", "")
+
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+
+    return ""
+
+
+def chunk_to_text(chunk) -> str:
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return ""
+
+
+@app.post("/chat")
+async def chat(request: Request) -> StreamingResponse:
+    body = await request.json()
+    prompt = get_last_user_text(body.get("messages", []))
+
+    async def event_stream() -> AsyncIterator[str]:
+        message_id = f"msg_{uuid.uuid4().hex}"
+        text_id = f"text_{uuid.uuid4().hex}"
+
+        yield to_sse({"type": "start", "messageId": message_id})
+        yield to_sse({"type": "start-step"})
+        yield to_sse({
+            "type": "data-status",
+            "data": {
+                "stage": "langchain",
+                "message": "LangChain 已开始执行模型调用",
+            },
+        })
+        yield to_sse({"type": "text-start", "id": text_id})
+
+        async for chunk in model.astream([HumanMessage(content=prompt)]):
+            delta = chunk_to_text(chunk)
+            if delta:
+                yield to_sse({
+                    "type": "text-delta",
+                    "id": text_id,
+                    "delta": delta,
+                })
+
+        yield to_sse({"type": "text-end", "id": text_id})
+        yield to_sse({
+            "type": "data-status",
+            "data": {
+                "stage": "done",
+                "message": "本轮回答已完成",
+            },
+        })
+        yield to_sse({"type": "finish-step"})
+        yield to_sse({"type": "finish"})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "x-vercel-ai-ui-message-stream": "v1",
+        },
+    )
+```
+
+### 迁移建议
+
+- 如果你当前已经使用 `meta.start`、`assistant.delta`、`tool.start`、`tool.end`，可以先做一层事件映射，不必一次性重写 agent。
+- 如果你当前依赖自定义 reducer 渲染业务卡片，迁移时优先把这些事件改为 `data-*` part，例如 `data-status`、`data-search-results`、`data-file-preview`。
+- 如果你仍然需要保留 Python 后端，没有问题；AI SDK 官方协议本身就支持由 Python / FastAPI 输出兼容的 SSE。
+
+### 参考资料
+
+- [AI SDK 官网](https://ai-sdk.dev/)
+- [AI SDK `useChat`](https://ai-sdk.dev/docs/reference/ai-sdk-ui/use-chat)
+- [AI SDK Stream Protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol)
+- [AI SDK Streaming Custom Data](https://ai-sdk.dev/docs/ai-sdk-ui/streaming-data)
+- [AI SDK Transport](https://ai-sdk.dev/docs/ai-sdk-ui/transport)
+
 ## 包结构
 
 ```
