@@ -2,39 +2,41 @@
 
 统一的流式聊天 SDK 工具包，包含前端和后端组件。
 
+`embedease-sdk` 是一套面向 AI 聊天、Agent 对话和流式生成式 UI 场景的全栈 SDK，提供前端 React 聊天接入能力、基于 Zustand 的消息状态管理、自定义事件扩展机制，以及后端 Python 流式编排、SSE 事件输出、工具调用生命周期封装等能力。它适合需要快速搭建聊天窗口、展示模型流式输出、渲染工具执行过程、接入 LangGraph/LangChain Agent、管理会话与历史消息的项目。仓库同时包含前端 `chat-sdk`、`chat-sdk-react` 和后端 `langgraph-agent-kit`，用于统一前后端聊天协议、事件格式和扩展方式，降低多项目复用与集成成本。
+
 > 当前版本：**v0.2.0**
 
 > [!IMPORTANT]
 > 本项目不再继续维护。现有代码会保留用于历史项目兼容、协议参考和迁移对照，但后续不再新增功能，也不再继续演进自定义聊天协议。
 >
-> 推荐新项目直接使用 [AI SDK](https://ai-sdk.dev/) 作为前端协议与渲染层，后端可继续搭配 LangChain Python / LangGraph。更准确地说，建议保留 LangChain 负责 agent 编排与 tool 调用，把流式协议切换为 AI SDK 的 UIMessage Stream / SSE 协议，并通过 `data-*` part 扩展业务 UI。
+> 推荐新项目直接使用 [Vercel AI SDK](https://ai-sdk.dev/) 作为前端协议与渲染层，后端可继续搭配 LangChain Python / LangGraph。更准确地说，建议保留 LangChain 负责 agent 编排与 tool 调用，把流式协议切换为 Vercel AI SDK 的 UIMessage Stream / SSE 协议，并通过 `data-*` part 扩展业务 UI。
 
 ## 停维说明
 
 ### 为什么不再维护
 
 - 本项目本质上维护了一套自定义聊天协议与前端状态层：前端围绕 `timelineReducer` / `useChat` / Zustand Store，后端围绕 `meta.start`、`assistant.delta`、`tool.start`、`tool.end` 等事件。
-- 这套能力和 AI SDK 当前提供的 `useChat`、transport、UIMessage、SSE stream protocol、tool parts、`data-*` custom data parts 已经高度重叠。
-- 继续维护独立协议，意味着要持续投入在协议演进、多前端框架适配、消息持久化、工具调用渲染、流重连与错误恢复上，维护收益已经低于直接复用 AI SDK 官方体系。
-- LangChain / LangGraph 更适合专注在 agent 编排、RAG、tool orchestration；而前端消息协议与生成式 UI 渲染，交给 AI SDK 更标准，也更容易和社区生态对齐。
+- 这套能力和 Vercel AI SDK 当前提供的 `useChat`、transport、UIMessage、SSE stream protocol、tool parts、`data-*` custom data parts 已经高度重叠。
+- 继续维护独立协议，意味着要持续投入在协议演进、多前端框架适配、消息持久化、工具调用渲染、流重连与错误恢复上，维护收益已经低于直接复用 Vercel AI SDK 官方体系。
+- LangChain / LangGraph 更适合专注在 agent 编排、RAG、tool orchestration；而前端消息协议与生成式 UI 渲染，交给 Vercel AI SDK 更标准，也更容易和社区生态对齐。
 
 ### 推荐替代方案
 
-- 前端：使用 AI SDK 的 `useChat`，按 `message.parts` 渲染文本、工具结果和自定义业务卡片。
-- 后端：输出 AI SDK UIMessage Stream 协议，保持 SSE 返回头 `x-vercel-ai-ui-message-stream: v1`。
+- 前端：使用 Vercel AI SDK 的 `useChat`，按 `message.parts` 渲染文本、工具结果和自定义业务卡片。
+- 后端：输出 Vercel AI SDK UIMessage Stream 协议，保持 SSE 返回头 `x-vercel-ai-ui-message-stream: v1`。
 - 扩展协议：不要再扩一套新的聊天事件名，优先使用官方 `data-*` custom data parts 承载业务 UI。
-- Agent 层：继续使用 LangChain Python / LangGraph，不需要迁移 agent 编排思路，只需要把流式输出映射到 AI SDK 协议。
+- Agent 层：继续使用 LangChain Python / LangGraph，不需要迁移 agent 编排思路，只需要把流式输出映射到 Vercel AI SDK 协议。
 
 ### 和当前 SDK 的使用对比
 
 | 场景 | 当前 `embedease-sdk` | 推荐方案 |
 |-----|------|------|
 | 前端状态入口 | `createChatStoreSlice()` / `useChat()` / `timelineReducer` | `useChat()` + `DefaultChatTransport` |
-| 后端输出协议 | 自定义 SSE 事件：`meta.start`、`assistant.delta`、`tool.start`、`tool.end` | AI SDK UIMessage Stream：`start`、`text-*`、`tool-*`、`start-step`、`finish-step`、`finish` |
+| 后端输出协议 | 自定义 SSE 事件：`meta.start`、`assistant.delta`、`tool.start`、`tool.end` | Vercel AI SDK UIMessage Stream：`start`、`text-*`、`tool-*`、`start-step`、`finish-step`、`finish` |
 | 业务扩展方式 | `composeReducers()` 组合自定义 reducer | 官方 `data-*` custom data parts |
 | 工具调用展示 | 自己维护 `tool.call` timeline item | 按 `message.parts` 中的 tool parts / data parts 渲染 |
 | Python 后端接入 | 自己维护 SSE 编码和事件语义 | Python 只需输出兼容的 SSE part，前端仍可直接使用 `useChat` |
-| 跨后端/传输层 | 需要自己封装 | AI SDK 原生支持 transport-based architecture，可继续走 HTTP，也可自定义 transport |
+| 跨后端/传输层 | 需要自己封装 | Vercel AI SDK 原生支持 transport-based architecture，可继续走 HTTP，也可自定义 transport |
 
 ### 如何使用对比
 
@@ -57,9 +59,9 @@ export const useChatStore = create(
 meta.start -> assistant.delta -> tool.start -> tool.end -> assistant.final
 ```
 
-**推荐方案：AI SDK**
+**推荐方案：Vercel AI SDK**
 
-前端保留 `useChat`，但把后端改成输出 AI SDK UIMessage Stream：
+前端保留 `useChat`，但把后端改成输出 Vercel AI SDK UIMessage Stream：
 
 ```typescript
 import { useChat } from "@ai-sdk/react";
@@ -109,9 +111,9 @@ export function ChatPage() {
 start -> start-step -> text-start -> text-delta -> data-status -> text-end -> finish-step -> finish
 ```
 
-### AI SDK + LangChain Python 最小示例
+### Vercel AI SDK + LangChain Python 最小示例
 
-下面这个最小示例保留 LangChain Python 负责模型调用，前端直接使用 AI SDK 的 `useChat`。示例里额外加入了 `data-status`，用来演示官方 `data-*` 扩充协议。
+下面这个最小示例保留 LangChain Python 负责模型调用，前端直接使用 Vercel AI SDK 的 `useChat`。示例里额外加入了 `data-status`，用来演示官方 `data-*` 扩充协议。
 
 **前端：React + `useChat`**
 
@@ -161,7 +163,7 @@ export default function ChatPage() {
 }
 ```
 
-**后端：FastAPI + LangChain Python + AI SDK SSE 协议**
+**后端：FastAPI + LangChain Python + Vercel AI SDK SSE 协议**
 
 ```python
 import json
@@ -266,15 +268,15 @@ async def chat(request: Request) -> StreamingResponse:
 
 - 如果你当前已经使用 `meta.start`、`assistant.delta`、`tool.start`、`tool.end`，可以先做一层事件映射，不必一次性重写 agent。
 - 如果你当前依赖自定义 reducer 渲染业务卡片，迁移时优先把这些事件改为 `data-*` part，例如 `data-status`、`data-search-results`、`data-file-preview`。
-- 如果你仍然需要保留 Python 后端，没有问题；AI SDK 官方协议本身就支持由 Python / FastAPI 输出兼容的 SSE。
+- 如果你仍然需要保留 Python 后端，没有问题；Vercel AI SDK 官方协议本身就支持由 Python / FastAPI 输出兼容的 SSE。
 
 ### 参考资料
 
-- [AI SDK 官网](https://ai-sdk.dev/)
-- [AI SDK `useChat`](https://ai-sdk.dev/docs/reference/ai-sdk-ui/use-chat)
-- [AI SDK Stream Protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol)
-- [AI SDK Streaming Custom Data](https://ai-sdk.dev/docs/ai-sdk-ui/streaming-data)
-- [AI SDK Transport](https://ai-sdk.dev/docs/ai-sdk-ui/transport)
+- [Vercel AI SDK 官网](https://ai-sdk.dev/)
+- [Vercel AI SDK `useChat`](https://ai-sdk.dev/docs/reference/ai-sdk-ui/use-chat)
+- [Vercel AI SDK Stream Protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol)
+- [Vercel AI SDK Streaming Custom Data](https://ai-sdk.dev/docs/ai-sdk-ui/streaming-data)
+- [Vercel AI SDK Transport](https://ai-sdk.dev/docs/ai-sdk-ui/transport)
 
 ## 包结构
 
